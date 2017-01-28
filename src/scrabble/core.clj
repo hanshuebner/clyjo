@@ -1,31 +1,51 @@
 (ns scrabble.core
   (:require [clojure.spec :as s]
+            [scrabble.defn-specs]
             [scrabble.transactions :refer [deftx pref-set pref]]))
 
 (def accounts (pref {}))
 
+(deftx clear-all-accounts! []
+  (pref-set accounts {}))
+
 (defn get-account [name]
   (get @accounts name))
 
-(defn account-valid? [account]
-  (not (neg? (::balance account))))
+(defn within-limit? [{:keys [::balance ::overdraft-limit]
+                      :or {::overdraft-limit 0}}]
+  (>= balance (- overdraft-limit)))
 
-(s/def ::account (s/and map?))
+(s/def ::balance integer?)
+(s/def ::account (s/and (s/keys :req [::balance ::name]
+                                :optional [::overdraft-limit])
+                        within-limit?))
 
 (deftx make-account! [name]
   {:pre [(not (get-account name))]}
-  (pref-set accounts (assoc @accounts name (pref {::balance 0}
-                                                 :validator account-valid?))))
+  (->> (pref {::name name
+              ::balance 0}
+             :validator (partial s/valid? ::account))
+       (assoc @accounts name)
+       (pref-set accounts))
+  (get-account name))
+
+(deftx set-overdraft-limit! [account limit]
+  {:pre [(s/conform ::account account)
+         (not (neg? limit))]}
+  (->> (assoc @account ::overdraft-limit limit)
+       (pref-set account)))
 
 (deftx deposit! [account amount]
   {:pre [(s/conform ::account account)
          (pos? amount)]}
-  (pref-set account (update @account ::balance + amount)))
+  (->> (update @account ::balance + amount)
+       (pref-set account)))
 
 (deftx withdraw! [account amount]
   {:pre [(s/conform ::account account)
          (pos? amount)]}
-  (pref-set account (update @account ::balance - amount)))
+  (->> (update @account ::balance - amount)
+       (pref-set account)))
 
 (deftx transfer! [from to amount]
   {:pre [(and (s/conform ::account from)
