@@ -1,7 +1,12 @@
 (ns scrabble.transactions
   (:import [clojure.lang IDeref])
   (:require [clojure.spec :as s]
-            [clojure.pprint :as pprint]))
+            [clojure.pprint :as pprint]
+            [slingshot.slingshot :refer [throw+]]
+            [clojure.java.io :as io]))
+
+;; FIXME:
+;; transactions are logged in a separae thread, asynchronously.
 
 ;;; Adapted from http://blog.klipse.tech/clojure/2016/10/10/defn-args-2.html
 
@@ -26,11 +31,29 @@
           "transaction functions must have simple symbols as arguments")
   `('~name ~@(map second (:args args))))
 
+(def ^:dynamic *logger* nil)
+
+(defn make-logger [logfile]
+  {:output-stream (io/writer (io/file logfile)
+                             :append true)
+   :id-counter (ref 0)
+   :transaction-counter (ref 0)})
+
+(defn open-logger [logfile]
+  (alter-var-root #'*logger* (fn [old-logger]
+                               (when old-logger
+                                 (.close (:output-stream old-logger)))
+                               (agent (make-logger logfile)))))
+
+(defn close-logger []
+  (alter-var-root #'*logger* (fn [logger]
+                               (when logger
+                                 (.close (:output-stream @logger)))
+                               nil)))
+
 ;; Persistent refs are references that represent a persistent entity.
 ;; They consist of the persistent ID of the entity and a ref to the
 ;; object.
-
-(def id-counter (atom 0))
 
 (defrecord PersistentRef [id ref]
   IDeref
@@ -45,22 +68,41 @@
   ((get-method clojure.pprint/simple-dispatch clojure.lang.IPersistentMap) o))
 
 (defn pref [value & args]
-  (PersistentRef. (swap! id-counter inc) (apply ref value args)))
+  (assert *logger* "Logger not opened")
+  (PersistentRef. (alter (:id-counter @*logger*) inc)
+                  (apply ref value args)))
 
 (defn pref-set [ref value]
   (ref-set (:ref ref) value))
 
-(defn log-transaction [name & args]
-  (println "log-transaction" name args))
+(defn palter [ref f & args]
+  (apply alter (:ref ref) f args))
+
+(defn log-transaction [{:keys [output-stream last-transaction-counter] :as logger}
+                       transaction-counter name & args]
+  (when (and last-transaction-counter
+             (<= transaction-counter last-transaction-counter))
+    (throw+ {:type ::inconsistent-transaction-ordering
+             :transaction-counter transaction-counter
+             :last-transaction-counter last-transaction-counter}))
+  (.write output-stream
+          (binding [*print-length* nil
+                    *print-level* nil
+                    *print-readably* true]
+            (prn-str (cons name args))))
+  (.flush output-stream)
+  (assoc logger :last-transaction-counter transaction-counter))
 
 (def ^:dynamic *within-transaction* false)
 
 (defn wrap-transaction [signature body]
-  `((let [return-value# (binding [*within-transaction* true]
-                          (dosync ~@body))]
-      (when-not *within-transaction*
-        (log-transaction ~@signature))
-      return-value#)))
+  `((assert *logger* "Logger not opened")
+    (dosync
+     (let [return-value# (binding [*within-transaction* true]
+                           ~@body)]
+       (when-not *within-transaction*
+         (send *logger* log-transaction (alter (:transaction-counter @*logger*) inc) ~@signature))
+       return-value#))))
 
 (defmacro deftx [& args]
   (let [{:keys [name] :as conf} (s/conform :scrabble.defn-specs/defn-args args)]
