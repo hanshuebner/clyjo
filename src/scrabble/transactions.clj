@@ -108,7 +108,8 @@
                  log-transaction
                  (alter (:transaction-counter @*logger*) inc)
                  logged?#
-                 ~@signature)))
+                 ~@signature)
+           (deref logged?#)))
        return-value#))))
 
 (defmacro deftx [& args]
