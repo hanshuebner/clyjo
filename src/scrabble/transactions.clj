@@ -79,7 +79,8 @@
   (apply alter (:ref ref) f args))
 
 (defn log-transaction [{:keys [output-stream last-transaction-counter] :as logger}
-                       transaction-counter name & args]
+                       transaction-counter logged?
+                       name & args]
   (when (and last-transaction-counter
              (<= transaction-counter last-transaction-counter))
     (throw+ {:type ::inconsistent-transaction-ordering
@@ -91,6 +92,7 @@
                     *print-readably* true]
             (prn-str (cons name args))))
   (.flush output-stream)
+  (deliver logged? true)
   (assoc logger :last-transaction-counter transaction-counter))
 
 (def ^:dynamic *within-transaction* false)
@@ -101,7 +103,12 @@
      (let [return-value# (binding [*within-transaction* true]
                            ~@body)]
        (when-not *within-transaction*
-         (send *logger* log-transaction (alter (:transaction-counter @*logger*) inc) ~@signature))
+         (let [logged?# (promise)]
+           (send *logger*
+                 log-transaction
+                 (alter (:transaction-counter @*logger*) inc)
+                 logged?#
+                 ~@signature)))
        return-value#))))
 
 (defmacro deftx [& args]
