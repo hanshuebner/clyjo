@@ -130,7 +130,7 @@
      ~@forms
      value#))
 
-(defn wrap-transaction [[[_ name] & signature] body]
+(defn wrap-transaction [[[_ function-name] & signature] body]
   `((assert *store* "Store not opened")
     (let [logged?# (promise)]
       (returning (dosync
@@ -141,7 +141,7 @@
                                      log-transaction
                                      (alter (:transaction-counter @*store*) inc)
                                      logged?#
-                                     ~(resolve name)
+                                     (var ~function-name)
                                      ~@signature))))
                  (when *log-transaction*
                    (deref logged?#))))))
