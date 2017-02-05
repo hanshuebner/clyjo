@@ -5,6 +5,10 @@
             [slingshot.slingshot :refer [throw+]]
             [clojure.java.io :as io]))
 
+(def ^:dynamic *store* nil)
+
+(def ^:dynamic *log-transaction* true)
+
 ;; FIXME:
 ;; transactions are logged in a separae thread, asynchronously.
 
@@ -31,26 +35,6 @@
           "transaction functions must have simple symbols as arguments")
   `('~name ~@(map second (:args args))))
 
-(def ^:dynamic *logger* nil)
-
-(defn make-logger [logfile]
-  {:output-stream (io/writer (io/file logfile)
-                             :append true)
-   :id-counter (ref 0)
-   :transaction-counter (ref 0)})
-
-(defn open-logger [logfile]
-  (alter-var-root #'*logger* (fn [old-logger]
-                               (when old-logger
-                                 (.close (:output-stream old-logger)))
-                               (agent (make-logger logfile)))))
-
-(defn close-logger []
-  (alter-var-root #'*logger* (fn [logger]
-                               (when logger
-                                 (.close (:output-stream @logger)))
-                               nil)))
-
 ;; Persistent refs are references that represent a persistent entity.
 ;; They consist of the persistent ID of the entity and a ref to the
 ;; object.
@@ -63,14 +47,19 @@
   (.write writer "#PersistentRef")
   (.write writer (pr-str {:id (:id value)})))
 
+(defmethod print-dup PersistentRef [value ^java.io.Writer writer]
+  (.write writer (format "(scrabble.transactions/lookup %d)" (:id value))))
+
 ;; Found in https://gist.github.com/rwilson/34c88a97c6260a7dc703
 (defmethod pprint/simple-dispatch PersistentRef [o]
   ((get-method clojure.pprint/simple-dispatch clojure.lang.IPersistentMap) o))
 
 (defn pref [value & args]
-  (assert *logger* "Logger not opened")
-  (PersistentRef. (alter (:id-counter @*logger*) inc)
-                  (apply ref value args)))
+  (assert *store* "Store not opened")
+  (let [id (alter (:id-counter @*store*) inc)
+        ref (PersistentRef. id (apply ref value args))]
+    (alter (:object-table @*store*) assoc id ref)
+    ref))
 
 (defn pref-set [ref value]
   (ref-set (:ref ref) value))
@@ -78,9 +67,46 @@
 (defn palter [ref f & args]
   (apply alter (:ref ref) f args))
 
-(defn log-transaction [{:keys [output-stream last-transaction-counter] :as logger}
+(defn lookup [id]
+  (assert *store* "Store not opened")
+  (or (get @(:object-table @*store*) id)
+      (throw+ {:type ::invalid-entity-id
+               :id id})))
+
+(defn restore [logfile]
+  (dosync
+   (with-open [in (java.io.PushbackReader. (io/reader logfile))]
+     (binding [*read-eval* true
+               *log-transaction* false]
+       (loop []
+         (when-let [form (read in false false)]
+           (eval form)
+           (recur)))))))
+
+(defn make-store [logfile]
+  {:output-stream (io/writer (io/file logfile)
+                             :append true)
+   :id-counter (ref 0)
+   :object-table (ref {})
+   :transaction-counter (ref 0)})
+
+(defn open-store [logfile]
+  (alter-var-root #'*store* (fn [old-store]
+                              (when old-store
+                                (.close (:output-stream @old-store)))
+                              (agent (make-store logfile))))
+  (when (.exists (io/file logfile))
+    (restore logfile)))
+
+(defn close-store []
+  (alter-var-root #'*store* (fn [store]
+                              (when store
+                                (.close (:output-stream @store)))
+                              nil)))
+
+(defn log-transaction [{:keys [output-stream last-transaction-counter] :as store}
                        transaction-counter logged?
-                       name & args]
+                       function-name & args]
   (when (and last-transaction-counter
              (<= transaction-counter last-transaction-counter))
     (throw+ {:type ::inconsistent-transaction-ordering
@@ -89,31 +115,39 @@
   (.write output-stream
           (binding [*print-length* nil
                     *print-level* nil
-                    *print-readably* true]
-            (prn-str (cons name args))))
+                    *print-readably* true
+                    *print-dup* true]
+            (prn-str (cons function-name args))))
   (.flush output-stream)
   (deliver logged? true)
-  (assoc logger :last-transaction-counter transaction-counter))
+  (assoc store :last-transaction-counter transaction-counter))
 
-(def ^:dynamic *within-transaction* false)
+(defmacro returning
+  "Compute a return value, then execute other forms for side effects.
+  Like prog1 in common lisp, or a (do) that returns the first form."
+  [value & forms]
+  `(let [value# ~value]
+     ~@forms
+     value#))
 
-(defn wrap-transaction [signature body]
-  `((assert *logger* "Logger not opened")
-    (dosync
-     (let [return-value# (binding [*within-transaction* true]
-                           ~@body)]
-       (when-not *within-transaction*
-         (let [logged?# (promise)]
-           (send *logger*
-                 log-transaction
-                 (alter (:transaction-counter @*logger*) inc)
-                 logged?#
-                 ~@signature)
-           (deref logged?#)))
-       return-value#))))
+(defn wrap-transaction [[[_ name] & signature] body]
+  `((assert *store* "Store not opened")
+    (let [logged?# (promise)]
+      (returning (dosync
+                  (returning (binding [*log-transaction* false]
+                               ~@body)
+                             (when *log-transaction*
+                               (send *store*
+                                     log-transaction
+                                     (alter (:transaction-counter @*store*) inc)
+                                     logged?#
+                                     ~(resolve name)
+                                     ~@signature))))
+                 (when *log-transaction*
+                   (deref logged?#))))))
 
 (defmacro deftx [& args]
-  (let [{:keys [name] :as conf} (s/conform :scrabble.defn-specs/defn-args args)]
+  (let [conf (s/conform :scrabble.defn-specs/defn-args args)]
     (->> (extract-signature conf)
          (partial wrap-transaction)
          (update-conf conf)

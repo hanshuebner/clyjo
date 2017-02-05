@@ -73,13 +73,14 @@
   {:pre [(and (s/valid? ::account @from)
               (s/valid? ::account @to)
               (pos? amount))]}
-  (let [bonds (set (::bonds to))
+  (let [bonds (set (::bonds @to))
         bond (first (filter #(and (= (::who %) from)
                                   (= (::amount %) amount))
                             bonds))]
-    (throw+ {:type ::no-matching-bond
-             ::from from
-             ::amount amount})
-    (palter to assoc ::bonds (dissoc bonds bond))
+    (when-not bond
+      (throw+ {:type ::no-matching-bond
+               ::from from
+               ::amount amount}))
+    (palter to assoc ::bonds (disj bonds bond))
     (withdraw! from amount)
     (deposit! to amount)))
