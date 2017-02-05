@@ -1,7 +1,7 @@
-(ns scrabble.core
+(ns clyjo.test.bank
   (:require [clojure.spec :as s]
-            [scrabble.defn-specs]
-            [scrabble.transactions :refer [deftx pref-set palter pref]]
+            [clyjo.defn-specs]
+            [clyjo.transactions :refer [deftx pref-set palter pref]]
             [slingshot.slingshot :refer [throw+]]))
 
 (def accounts)

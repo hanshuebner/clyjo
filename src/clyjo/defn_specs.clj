@@ -1,4 +1,4 @@
-(ns scrabble.defn-specs
+(ns clyjo.defn-specs
   (:require [clojure.spec :as s]
             [clojure.future :refer :all]))
 

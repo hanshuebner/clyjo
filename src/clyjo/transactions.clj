@@ -1,4 +1,4 @@
-(ns scrabble.transactions
+(ns clyjo.transactions
   (:import [clojure.lang IDeref])
   (:require [clojure.spec :as s]
             [clojure.pprint :as pprint]
@@ -48,7 +48,7 @@
   (.write writer (pr-str {:id (:id value)})))
 
 (defmethod print-dup PersistentRef [value ^java.io.Writer writer]
-  (.write writer (format "(scrabble.transactions/lookup %d)" (:id value))))
+  (.write writer (format "(clyjo.transactions/lookup %d)" (:id value))))
 
 ;; Found in https://gist.github.com/rwilson/34c88a97c6260a7dc703
 (defmethod pprint/simple-dispatch PersistentRef [o]
@@ -147,9 +147,9 @@
                    (deref logged?#))))))
 
 (defmacro deftx [& args]
-  (let [conf (s/conform :scrabble.defn-specs/defn-args args)]
+  (let [conf (s/conform :clyjo.defn-specs/defn-args args)]
     (->> (extract-signature conf)
          (partial wrap-transaction)
          (update-conf conf)
-         (s/unform :scrabble.defn-specs/defn-args)
+         (s/unform :clyjo.defn-specs/defn-args)
          (cons `defn))))
