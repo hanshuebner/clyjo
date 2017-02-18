@@ -62,6 +62,9 @@
                  (bank/repay! donald scrooge 20)))
     (is (thrown? Exception
                  (bank/repay! donald scrooge 5)))
+    (bank/borrow! scrooge donald 10)
+    (bank/repay! donald scrooge 10)
+    (is (= (:clyjo.test.bank/balance @donald) 10))
     (bank/repay! donald scrooge 10)
     (is (thrown? Exception
                  (bank/repay! donald scrooge 10)))

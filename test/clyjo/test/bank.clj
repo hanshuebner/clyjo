@@ -4,6 +4,25 @@
             [clyjo.transactions :refer [deftx pref-set palter pref]]
             [slingshot.slingshot :refer [throw+]]))
 
+(defn within-limit? [{:keys [::balance ::overdraft-limit]
+                      :or {::overdraft-limit 0}}]
+  (>= balance (- overdraft-limit)))
+
+(defn bond-ref? [thing]
+  (and (instance? clyjo.transactions.PersistentRef thing)
+       (s/valid? ::bond @thing)))
+
+(s/def ::account (s/and (s/keys :req [::name
+                                      ::balance
+                                      ::bonds]
+                                :optional [::overdraft-limit])
+                        within-limit?))
+(s/def ::balance integer?)
+(s/def ::bonds (s/and set?
+                      (s/every ::bond-ref)))
+(s/def ::bond-ref bond-ref?)
+(s/def ::bond (s/keys :req [::who ::amount]))
+
 (def accounts)
 
 (deftx make-bank []
@@ -13,74 +32,50 @@
 (defn get-account [name]
   (get @accounts name))
 
-(defn within-limit? [{:keys [::balance ::overdraft-limit]
-                      :or {::overdraft-limit 0}}]
-  (>= balance (- overdraft-limit)))
-
-(s/def ::balance integer?)
-(s/def ::bond (s/keys :req [::who
-                            ::amount]))
-(s/def ::bonds (s/* ::bond))
-(s/def ::account (s/and (s/keys :req [::balance
-                                      ::name]
-                                :optional [::overdraft-limit
-                                           ::bonds])
-                        within-limit?))
-
 (deftx make-account! [name]
   {:pre [(not (get-account name))]}
-  (->> (pref {::name name
-              ::balance 0}
-             :validator (partial s/valid? ::account))
-       (assoc @accounts name)
-       (pref-set accounts))
+  (palter accounts assoc name
+          (pref {::name name
+                 ::balance 0
+                 ::bonds #{}}
+                :validator (partial s/valid? ::account)))
   (get-account name))
 
 (deftx set-overdraft-limit! [account limit]
-  {:pre [(s/valid? ::account @account)
-         (not (neg? limit))]}
-  (->> (assoc @account ::overdraft-limit limit)
-       (pref-set account)))
+  {:pre [(not (neg? limit))]}
+  (palter account assoc ::overdraft-limit limit))
 
 (deftx deposit! [account amount]
-  {:pre [(s/valid? ::account @account)
-         (pos? amount)]}
-  (->> (update @account ::balance + amount)
-       (pref-set account)))
+  {:pre [(pos? amount)]}
+  (palter account update  ::balance + amount))
 
 (deftx withdraw! [account amount]
-  {:pre [(s/valid? ::account @account)
-         (pos? amount)]}
-  (->> (update @account ::balance - amount)
-       (pref-set account)))
+  {:pre [(pos? amount)]}
+  (palter account update ::balance - amount))
 
 (deftx transfer! [from to amount]
-  {:pre [(and (s/valid? ::account @from)
-              (s/valid? ::account @to)
-              (pos? amount))]}
+  {:pre [(pos? amount)]}
   (withdraw! from amount)
   (deposit! to amount))
 
 (deftx borrow! [from to amount]
-  {:pre [(and (s/valid? ::account @from)
-              (s/valid? ::account @to)
-              (pos? amount))]}
-  (palter from update ::bonds conj {::who to ::amount amount})
+  {:pre [(pos? amount)]}
+  (palter from update ::bonds conj (pref {::who to ::amount amount}
+                                         :validator (partial s/valid? ::bond)))
   (withdraw! from amount)
   (deposit! to amount))
 
-(deftx repay! [from to amount]
-  {:pre [(and (s/valid? ::account @from)
-              (s/valid? ::account @to)
-              (pos? amount))]}
-  (let [bonds (set (::bonds @to))
-        bond (first (filter #(and (= (::who %) from)
-                                  (= (::amount %) amount))
-                            bonds))]
-    (when-not bond
+(defn matching-bond [account who amount]
+  (or (first (filter #(and (= (::who @%) who)
+                           (= (::amount @%) amount))
+                     (::bonds @account)))
       (throw+ {:type ::no-matching-bond
-               ::from from
-               ::amount amount}))
-    (palter to assoc ::bonds (disj bonds bond))
-    (withdraw! from amount)
-    (deposit! to amount)))
+               ::acount account
+               ::who who
+               ::amount amount})))
+
+(deftx repay! [from to amount]
+  {:pre [(pos? amount)]}
+  (palter to update-in [::bonds] disj (matching-bond to from amount))
+  (withdraw! from amount)
+  (deposit! to amount))
