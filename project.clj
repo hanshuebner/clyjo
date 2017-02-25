@@ -6,4 +6,6 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [slingshot "0.12.2"]
                  [clojure-future-spec "1.9.0-alpha14"]
-                 [org.clojure/test.check "0.9.0"]])
+                 [org.clojure/test.check "0.9.0"]
+                 [org.clojure/java.jdbc "0.7.0-alpha1"]
+                 [postgresql "9.3-1102.jdbc41"]])
