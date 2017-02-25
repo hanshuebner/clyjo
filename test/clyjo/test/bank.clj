@@ -5,7 +5,7 @@
             [slingshot.slingshot :refer [throw+]]))
 
 (defn within-limit? [{:keys [::balance ::overdraft-limit]
-                      :or {::overdraft-limit 0}}]
+                      :or {overdraft-limit 0}}]
   (>= balance (- overdraft-limit)))
 
 (defn bond-ref? [thing]
