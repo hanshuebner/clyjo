@@ -1,3 +1,3 @@
 # Identity in a world of values
 
-Preparations for my :clojureD 2017 talk.
+Proof-of-concept implementation of durable transactions based on Clojure's STM.
